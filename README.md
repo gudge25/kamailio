@@ -36,3 +36,9 @@ INVITE з PBX     → Kamailio → Exten
 ```bash
 pjsua --null-audio --no-tcp --outbound sip:proxy.com;lr
 ```
+
+```
+sudo systemctl disable rtpengine-daemon.service
+sudo systemctl disable rtpengine-recording-daemon.service
+sudo systemctl disable rtpengine-recording-nfs-mount.service
+```
