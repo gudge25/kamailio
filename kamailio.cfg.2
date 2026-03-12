@@ -1,0 +1,145 @@
+#!KAMAILIO
+
+
+loadmodule "tm.so"
+loadmodule "sl.so"
+loadmodule "pv.so"
+loadmodule "xlog.so"
+loadmodule "siputils.so"
+loadmodule "nathelper.so"
+loadmodule "textops.so" # text operations
+loadmodule "rr.so"
+loadmodule "textopsx.so" # for encode/decode_contact
+
+####### Include Local Config If Exists #########
+import_file "kamailio-local.cfg"
+
+
+
+listen=udp:eth0:5060
+#server_header="Server: Kamailio SIP Server"
+server_header="Server: SIP Server"
+modparam("siputils", "contact_flds_separator", "*")
+modparam("rr", "append_fromtag", 0)
+
+request_route {
+    # 
+    xlog("L_ALERT" , "NEW $rm from $fu (IP:$si:$sp) URI $rd \n");
+    # [SELF-REQUEST CHECK]
+    if (uri==myself) {
+        if (is_method {})
+        sl_send_reply("200","OK");
+        exit;
+    }        
+    # Log Request
+    #xlog("L_ALERT" , "NEW $rm from $fu (IP:$si:$sp)\n");
+
+    # [NAT] Завжди вмикаємо відповідь на порт джерела
+    force_rport();
+
+    # [SANITY]
+    #if (!mf_process_maxfwd_header("10")) {
+    #    sl_send_reply("483","Too Many Hops");
+    #    exit;
+    #}
+
+    # =================================================================
+    # [ВАЖЛИВО] ОБРОБКА ВЖЕ ВСТАНОВЛЕНИХ ДІАЛОГІВ (ACK, BYE, re-INVITE)
+    # =================================================================
+    # Якщо запит має заголовок Route (тобто це частина діалогу),
+    # loose_route() розбере маршрут.
+    if (has_totag()) {
+        if (loose_route()) {
+            # Тут можна додати rtpengine для re-INVITE
+            t_relay();
+            exit;
+        }
+        if (is_method("ACK")) {
+                                if (t_check_trans()) {
+                                        # no loose-route, but stateful ACK;
+                                        # must be an ACK after a 487
+                                        # or e.g. 404 from upstream server
+                                        t_relay();
+                                        exit;
+                                } else {
+                                        # ACK without matching transaction ... ignore and discard
+                                        #xlog("ACK without matching transaction ... ignore and discard");
+                                        exit;
+                                }
+                        }
+    }
+
+    # =================================================================
+    # СЦЕНАРІЙ 1: РЕЄСТРАЦІЯ
+    # =================================================================
+    if (is_method("REGISTER")) {
+        if (!($rd =~ ".*\\.co\\.uk$")) {
+        #xlog("L_WARN", "Blocked request to $rd from $si\n");
+        #sl_send_reply("200", "Okay");
+        exit;
+
+        }
+
+
+	
+        if (nat_uac_test("19")) {
+            fix_nated_contact();
+        }
+        msg_apply_changes();
+        # Кодуємо
+        encode_contact("senc", KAMAILIO_IP);
+        #$du = "sip:" + ASTERISK_IP + ":5057";
+        t_relay();
+        exit;
+    }
+
+    # =================================================================
+    # СЦЕНАРІЙ 2: ВХІДНИЙ ДЗВІНОК (Asterisk -> User)
+    # =================================================================
+    # Тільки початкові запити (без to_tag), бо діалогові пішли в loose_route вище
+    if ($si == ASTERISK_IP && !has_totag()) {
+        
+        if ($rU =~ "^senc") {
+            xlog("L_INFO", "[INBOUND] Decoding URI\n");
+            decode_contact();
+
+            # [SAFETY CHECK] Перевірка, щоб не зациклити
+            if ($ru =~ KAMAILIO_IP) {
+                 xlog("L_CRIT", "Loop detected after decode! Stopping.\n");
+                 sl_send_reply("500", "Loop Detected");
+                 exit;
+            }
+
+            # Додаємо Record-Route для INVITE
+            if (is_method("INVITE")) {
+                record_route();
+            }
+            
+            t_relay();
+            exit;
+        }
+    }
+
+    # =================================================================
+    # СЦЕНАРІЙ 3: ВИХІДНИЙ ДЗВІНОК (User -> Asterisk)
+    # =================================================================
+    if ($si != ASTERISK_IP && !has_totag()) {
+        
+        # Фіксимо NAT тільки для INVITE (для ACK не треба, там loose_route)
+        if (is_method("INVITE")) {
+            if (nat_uac_test("19")) {
+                 fix_nated_contact(); 
+            }
+            record_route();
+        }
+
+        # Все, що не обробили вище - шлемо на Asterisk
+        #$du = "sip:" + ASTERISK_IP + ":5057";
+        if(uri==myself) {
+		    sl_send_reply("200","OK");
+		    exit;
+	    }
+        t_relay();
+        exit;
+    }
+}
