@@ -65,8 +65,8 @@ loadmodule "nathelper.so" # NAT helper module for handling NAT-related issues
 loadmodule "textopsx.so"
 
 ####### Module Parameters ########
-modparam("tm", "auto_inv_100", 1) # Automatically send 100 Trying for INVITE requests
-modparam("tm", "auto_inv_100_reason", "Trying") # Reason phrase for 100 Trying
+# modparam("tm", "auto_inv_100", 1) # Automatically send 100 Trying for INVITE requests
+# modparam("tm", "auto_inv_100_reason", "Trying") # Reason phrase for 100 Trying
 
 modparam("sanity", "noreply", 1) 
 
@@ -75,26 +75,32 @@ modparam("sanity", "noreply", 1)
 ####### Routing Logic ########
 
 request_route {
+    # Handle OPTIONS requests for keepalive 
+    if(uri==myself) {
+		sl_send_reply("200","Keepalive");
+		exit;
+	}
+
     # per request initial checks
 	route(REQINIT);
 
     # Log the request method, from URI, and source IP
-    xlog("L_ALERT" , "NEW $rm from $fu (IP:$si:$sp)\n");
-    if (uri == myself) {
-        if (uri =~ "^sip:proxy_ip") {
-            decode_contact();
-            // xlog("L_ALERT" , "Decoded $rU $rd \n");
-            // remove_hf("To");
-            // append_hf("To: <sip:$rU@$rd>\n", "From");
-            record_route();
-            t_on_reply("MANAGE_REPLY");
-            t_relay();
-            exit;
-        }
+    // xlog("L_ALERT" , "NEW $rm from $fu (IP:$si:$sp)\n");
+    // if (uri == myself) {
+    //     if (uri =~ "^sip:proxy_ip") {
+    //         decode_contact();
+    //         // xlog("L_ALERT" , "Decoded $rU $rd \n");
+    //         // remove_hf("To");
+    //         // append_hf("To: <sip:$rU@$rd>\n", "From");
+    //         record_route();
+    //         t_on_reply("MANAGE_REPLY");
+    //         t_relay();
+    //         exit;
+    //     }
 
-        sl_send_reply("200", "OK");
-        exit;
-    }
+    //     sl_send_reply("200", "OK");
+    //     exit;
+    // }
     # REGISTER
     route(REGISTRAR);
 
@@ -149,19 +155,29 @@ request_route {
 
 
 route[REQINIT] {
+	# send back replies to the source address of request
+	force_rport();
+
+    if($ua =~ "friendly|scanner|sipcli|sipvicious|VaxSIPUserAgent|pplsip") {
+        # silent drop for scanners - uncomment next line if want to reply
+        sl_send_reply("200", "OK");
+        exit;
+	}
 
     # initial sanity checks -- messages with
 	# max_forwards==0, or excessively long requests
 	if (!mf_process_maxfwd_header("10")) {
 		sl_send_reply("483", "Too Many Hops");
 		exit;
-	};
+	}
+
 	if (msg:len >= 2048 ) {
 		sl_send_reply("513", "Message too big");
 		exit;
-	};
-    if(!sanity_check("1024", "6")) {
-        xdbg("sanity checks failed\n");
+	}
+
+    if(!sanity_check("17895", "7")) {
+        xlog("Malformed SIP request from $si:$sp\n");
         sanity_reply();
         exit;
     }
@@ -172,11 +188,11 @@ route[REQINIT] {
 route[REGISTRAR] {
     if (!is_method("REGISTER")) return;
     # add_contact_alias("enc_ct", ADV_HOST, 5060);
-    if (nat_uac_test("19")) {
-        xlog("L_INFO", "NAT detected for REGISTER request\n");
-        fix_nated_contact();
-        msg_apply_changes();
-    }
+    // if (nat_uac_test("19")) {
+    //     xlog("L_INFO", "NAT detected for REGISTER request\n");
+    //     fix_nated_contact();
+    //     msg_apply_changes();
+    // }
     encode_contact("proxy_ip", ADV_HOST);
     t_relay();
     exit;
